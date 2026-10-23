@@ -19,12 +19,12 @@ function isTemporaryAvailabilityError(error: unknown): boolean {
     || /\b(429|500|502|503|504)\b|UNAVAILABLE|RESOURCE_EXHAUSTED|HIGH DEMAND|RATE LIMIT|TEMPORARILY UNAVAILABLE/.test(message);
 }
 
-async function generateWithDeepSeek(bytes: Buffer, mimeType: string, keepDescription?: string): Promise<string> {
+async function generateWithDeepSeek(bytes: Buffer, mimeType: string, timeoutMs: number, keepDescription?: string): Promise<string> {
   if (!config.DEEPSEEK_API_KEY) throw Object.assign(new Error('Background removal is unavailable: configure DEEPSEEK_API_KEY on the server.'), { statusCode: 503 });
   const response = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(config.GEMINI_REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
       model: config.DEEPSEEK_MODEL,
       messages: [{ role: 'user', content: [
@@ -51,12 +51,12 @@ async function generateWithDeepSeek(bytes: Buffer, mimeType: string, keepDescrip
   return text;
 }
 
-async function generateWithOpenAI(bytes: Buffer, mimeType: string, keepDescription?: string): Promise<string> {
+async function generateWithOpenAI(bytes: Buffer, mimeType: string, timeoutMs: number, keepDescription?: string): Promise<string> {
   if (!config.OPENAI_API_KEY) throw Object.assign(new Error('Background removal is unavailable: configure OPENAI_API_KEY on the server.'), { statusCode: 503 });
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(config.GEMINI_REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
       model: config.OPENAI_MODEL,
       messages: [{ role: 'user', content: [
@@ -83,7 +83,7 @@ async function generateWithOpenAI(bytes: Buffer, mimeType: string, keepDescripti
   return text;
 }
 
-async function generateWithGemini(bytes: Buffer, mimeType: string, model: string, keepDescription?: string, retry = false): Promise<string> {
+async function generateWithGemini(bytes: Buffer, mimeType: string, model: string, timeoutMs: number, keepDescription?: string, retry = false): Promise<string> {
   const response = await new GoogleGenAI({ apiKey: config.GEMINI_API_KEY }).models.generateContent({
     model,
     contents: [{ role: 'user', parts: [
@@ -102,7 +102,7 @@ async function generateWithGemini(bytes: Buffer, mimeType: string, model: string
       },
       temperature: 0,
       maxOutputTokens: config.GEMINI_MAX_OUTPUT_TOKENS,
-      httpOptions: { timeout: config.GEMINI_REQUEST_TIMEOUT_MS },
+      httpOptions: { timeout: timeoutMs },
     },
   });
   if (!response.text) throw new Error('Gemini returned an empty segmentation response.');
@@ -111,6 +111,8 @@ async function generateWithGemini(bytes: Buffer, mimeType: string, model: string
 
 export async function segmentImage(bytes: Buffer, mimeType: string, keepDescription?: string): Promise<Segmentation> {
   const provider = config.AI_PROVIDER;
+  const deadline = Date.now() + config.GEMINI_REQUEST_TIMEOUT_MS;
+  const timeoutError = () => Object.assign(new Error(`${provider === 'deepseek' ? 'DeepSeek' : provider === 'openai' ? 'OpenAI' : 'Gemini'} processing timed out. Try again with a smaller image.`), { statusCode: 504 });
   if (provider === 'gemini' && !config.GEMINI_API_KEY) throw Object.assign(new Error('Background removal is unavailable: configure GEMINI_API_KEY on the server.'), { statusCode: 503 });
   if (provider === 'deepseek' && !config.DEEPSEEK_API_KEY) throw Object.assign(new Error('Background removal is unavailable: configure DEEPSEEK_API_KEY on the server.'), { statusCode: 503 });
   if (provider === 'openai' && !config.OPENAI_API_KEY) throw Object.assign(new Error('Background removal is unavailable: configure OPENAI_API_KEY on the server.'), { statusCode: 503 });
@@ -121,22 +123,28 @@ export async function segmentImage(bytes: Buffer, mimeType: string, keepDescript
   for (const [modelIndex, model] of models.entries()) {
     const attempts = config.GEMINI_MAX_RETRIES + 1;
     for (let attempt = 0; attempt < attempts; attempt++) {
+      const timeoutMs = deadline - Date.now();
+      if (timeoutMs <= 0) throw timeoutError();
       try {
         const text = provider === 'deepseek'
-          ? await generateWithDeepSeek(bytes, mimeType, keepDescription)
+          ? await generateWithDeepSeek(bytes, mimeType, timeoutMs, keepDescription)
           : provider === 'openai'
-            ? await generateWithOpenAI(bytes, mimeType, keepDescription)
-            : await generateWithGemini(bytes, mimeType, model, keepDescription, attempt > 0);
+            ? await generateWithOpenAI(bytes, mimeType, timeoutMs, keepDescription)
+            : await generateWithGemini(bytes, mimeType, model, timeoutMs, keepDescription, attempt > 0);
         const result = resultSchema.parse(JSON.parse(text));
         if (!result.subjects.length) throw new Error(`${provider === 'deepseek' ? 'DeepSeek' : provider === 'openai' ? 'OpenAI' : 'Gemini'} could not detect a clear foreground subject. Try an image with a more distinct subject.`);
         return result;
       } catch (error) {
+        if (Date.now() >= deadline) throw timeoutError();
         lastError = error;
         const statusCode = (error as { statusCode?: number } | null)?.statusCode;
         if (statusCode === 401 || statusCode === 402 || statusCode === 403) throw error;
         lastErrorWasAvailability = isTemporaryAvailabilityError(error);
         if (lastErrorWasAvailability && modelIndex + 1 < models.length) break;
-        if (attempt + 1 < attempts) await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
+        if (attempt + 1 < attempts) {
+          const delay = Math.min(400 * (attempt + 1), deadline - Date.now());
+          if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
     }
   }

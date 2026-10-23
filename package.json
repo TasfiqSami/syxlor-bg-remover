@@ -8,7 +8,7 @@
     "dev:web": "vite --host 0.0.0.0",
     "dev:server": "tsx watch src/server/index.ts",
     "build": "tsc -b && vite build",
-    "start": "node dist/server/index.js",
+    "start": "node -e \"process.env.NODE_ENV='production'; import('./dist/server/index.js')\"",
     "check": "tsc -b --pretty",
     "test": "tsx --test tests/*.test.ts"
   },

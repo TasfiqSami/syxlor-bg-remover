@@ -49,7 +49,7 @@ For deployments, set `CORS_ORIGIN` to the exact site origin if the browser app a
 npm run build
 ```
 
-The frontend build is written to `dist/client` and the compiled server to `dist/server`. Set `NODE_ENV=production` and run `npm start`; the Fastify service serves the built client and the API from one origin.
+The frontend build is written to `dist/client` and the compiled server to `dist/server`. Run `npm start`; it sets `NODE_ENV=production` and the Fastify service serves the built client and API from one origin.
 
 Build and run the included container with `docker build -t syxlor-bg-remover .` and `docker run --rm -p 8787:8787 --env-file .env syxlor-bg-remover`.
 
