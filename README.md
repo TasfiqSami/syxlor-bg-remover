@@ -65,3 +65,7 @@ fal.ai BiRefNet returns a foreground mask. The server resizes the mask to the or
 ## Privacy and legal
 
 See [Privacy Policy](public/privacy.html) and [Terms and Conditions](public/terms.html). Images are sent to the configured provider for background-removal processing. Syxlor does not persist images to disk or a database. Configure deployment access and log retention, and review the selected provider's terms for your environment.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
