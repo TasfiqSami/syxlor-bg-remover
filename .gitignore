@@ -4,3 +4,6 @@ dist/
 runtime-logs/
 *.log
 .DS_Store
+
+.vercel
+.env*
